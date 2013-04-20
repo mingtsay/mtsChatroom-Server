@@ -110,6 +110,8 @@ void connected_event(int client_id) // «È¤áºÝ³s¤W¤F
 {
     client_data[client_id].state = CLIENT_STATE_CONNECTED;
     client_data[client_id].ip = my_socket->get_handler_ip(client_id);
+
+    cout << "Connection from " << client_data[client_id].ip << " assigned as " << client_id << "." << endl;
 }
 
 void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹L¨Ó¤F
@@ -118,7 +120,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
     int type, type_send = -1;
     int client_length, server_length, nickname_length, password_length;
     int color_id, to_id, message_length, count_online, online_length;
-    char *data, *string_send, *string_nickname, *string_password, *string_message;
+    char *data, *string_send = NULL, *string_nickname, *string_password, *string_message;
     char *string_empty = new char(1); string_empty[0] = '\0';
     char string_unknown[] = "Sorry but I could not understand what you want to do.";
 
@@ -127,13 +129,15 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
         switch(type)
         {
         case MTCR_CLIENT_GET_VERSION: // ¨ú±oª©¥»
+            cout << "Client " << client_id << " request the version." << endl;
+
             client_length = strlen(client_version);
             server_length = strlen(server_version);
 
             string_send = new char(client_length + server_length + 3);
 
-            string_send[0] = client_length;
-            string_send[client_length + 1] = server_length;
+            string_send[0] = client_length & 0xFF;
+            string_send[client_length + 1] = server_length & 0xFF;
 
             memcpy(string_send + 1, client_version, client_length);
             memcpy(string_send + client_length + 2, server_version, server_length);
@@ -143,6 +147,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
             type_send = MTCR_SERVER_VERSION;
             break;
         case MTCR_CLIENT_JOIN: // ¥[¤J²á¤Ñ«Ç
+            cout << "Client " << client_id << " want to join." << endl;
             if(client_data[client_id].state == CLIENT_STATE_CONNECTED)
             {
                 nickname_length = data[0];
@@ -153,6 +158,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
 
                 if(nickname_exists(string_nickname)) // ÀË¬d¼ÊºÙ¦s¦b
                 {
+                    cout << "Nickname " << string_nickname << " is already exists." << endl;
                     type_send = MTCR_SERVER_JOIN_FAILED;
                     string_send = string_empty;
 
@@ -160,6 +166,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
                 }
                 else if(strcmp(super_nickname, string_nickname) == 0) // ­n±K½Xªº¼ÊºÙ
                 {
+                    cout << "Nickname needs password." << endl;
                     type_send = MTCR_SERVER_PASSWORD_REQUIRED;
                     string_send = string_empty;
 
@@ -168,12 +175,14 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
                 }
                 else // ¥i¨Ï¥Îªº¼ÊºÙ
                 {
+                    cout << "Nickname " << string_nickname << " is available." << endl;
+
                     strcpy(client_data[client_id].nickname, string_nickname);
                     client_data[client_id].state = CLIENT_STATE_JOINED;
 
                     string_send = new char(nickname_length + 3);
-                    string_send[0] = client_id;
-                    string_send[1] = nickname_length;
+                    string_send[0] = client_id & 0xFF;
+                    string_send[1] = nickname_length & 0xFF;
                     memcpy(string_send + 2, string_nickname, nickname_length);
                     string_send[nickname_length + 2] = '\0';
 
@@ -195,6 +204,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
             }
             break;
         case MTCR_CLIENT_PASSWORD: // µn¤J±K½X
+            cout << "Client " << client_id << " send a password." << endl;
             if(client_data[client_id].state == CLIENT_STATE_PASSWORD)
             {
                 password_length = data[0];
@@ -205,6 +215,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
 
                 if(strcmp(super_password, string_password) == 0)
                 {
+                    cout << "Password is correct." << endl;
                     type_send = MTCR_SERVER_JOIN_SUCCESSED;
                     string_send = string_empty;
 
@@ -212,6 +223,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
                 }
                 else
                 {
+                    cout << "Password is incorrect." << endl;
                     type_send = MTCR_SERVER_PASSWORD_INCORRECT;
                     string_send = string_empty;
                 }
@@ -220,6 +232,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
             }
             break;
         case MTCR_CLIENT_CHANGE_NICKNAME: // §ï¼ÊºÙ
+            cout << "Client " << client_id << " request to change nickname." << endl;
             if(client_data[client_id].state == CLIENT_STATE_JOINED)
             {
                 nickname_length = data[0];
@@ -230,16 +243,18 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
 
                 if(nickname_exists(string_nickname) || strcmp(super_nickname, string_nickname) == 0) // ¼ÊºÙ¤£¥i¥Î
                 {
+                    cout << "Nickname " << string_nickname << " is already exists." << endl;
                     type_send = MTCR_SERVER_CHANGE_NICKNAME_FAIL;
                     string_send = string_empty;
                 }
                 else // ¼ÊºÙ¥i¨Ï¥Î
                 {
+                    cout << "Nickname " << string_nickname << " is available." << endl;
                     strcpy(client_data[client_id].nickname, string_nickname);
 
                     string_send = new char(nickname_length + 3);
-                    string_send[0] = client_id;
-                    string_send[1] = nickname_length;
+                    string_send[0] = client_id & 0xFF;
+                    string_send[1] = nickname_length & 0xFF;
                     memcpy(string_send + 2, string_nickname, nickname_length);
                     string_send[nickname_length + 2] = '\0';
 
@@ -261,8 +276,11 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
             }
             break;
         case MTCR_CLIENT_SEND_MESSAGE: // °e°T®§
+            cout << "Client " << client_id << " sent a message." << endl;
             if(client_data[client_id].state == CLIENT_STATE_JOINED)
             {
+                cout << client_data[client_id].nickname << ": " << string_message << endl;
+
                 color_id = data[0];
                 message_length = (data[1] << 8) + data[2];
 
@@ -271,8 +289,8 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
                 string_message[message_length] = '\0';
 
                 string_send = new char(message_length + 5);
-                string_send[0] = client_id;
-                string_send[1] = color_id;
+                string_send[0] = client_id & 0xFF;
+                string_send[1] = color_id & 0xFF;
                 string_send[2] = (message_length >> 8) & 0xFF;
                 string_send[3] = message_length & 0xFF;
                 memcpy(string_send + 4, string_message, message_length);
@@ -290,6 +308,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
             }
             break;
         case MTCR_CLIENT_SEND_PRIVATE: // ¶Ç¨p¤H°T®§
+            cout << "Client " << client_id << " sent a private message." << endl;
             if(client_data[client_id].state == CLIENT_STATE_JOINED)
             {
                 color_id = data[0];
@@ -298,6 +317,8 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
 
                 if(client_data[to_id].state == CLIENT_STATE_JOINED) // ¥i¥H¶Ç
                 {
+                    cout << client_data[client_id].nickname << "(to " << client_data[to_id].nickname << "): " << string_message << endl;
+
                     string_message = new char(message_length + 1);
                     memcpy(string_message, data + 4, message_length);
                     string_message[message_length] = '\0';
@@ -317,6 +338,7 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
             }
             break;
         case MTCR_CLIENT_GET_ONLINE_LIST: // ¨ú±o½u¤W¨Ï¥ÎªÌ²M³æ
+            cout << "Client " << client_id << " request the online list." << endl;
             if(client_data[client_id].state == CLIENT_STATE_JOINED)
             {
                 // ­pºâ¤H¼ÆÁÙ¦³¼ÊºÙªø«×
@@ -333,19 +355,21 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
 
                 // ·Ç³Æ¦r¦ê
                 string_send = new char(online_length + 1);
-                string_send[0] = count_online;
+                string_send[0] = count_online & 0xFF;
 
                 // ·Ç³Æ²M³æ
                 for(i = 0, j = 1; i < MAX_CONNECTION; ++i)
                 {
                     if(client_data[i].state == CLIENT_STATE_JOINED)
                     {
-                        string_send[j++] = i;
-                        string_send[j++] = strlen(client_data[i].nickname);
+                        string_send[j++] = i & 0xFF;
+                        string_send[j++] = strlen(client_data[i].nickname) & 0xFF;
                         memcpy(string_send + j, client_data[i].nickname, strlen(client_data[i].nickname));
                         j += strlen(client_data[i].nickname);
                     }
                 }
+
+                string_send[online_length] = '\0';
 
                 type_send = MTCR_SERVER_ONLINE_LIST;
             }
@@ -355,11 +379,13 @@ void data_arrival_event(int client_id, const char *string_data) // «È¤áºÝ¶Ç¸ê®Æ¹
 
     delete [] data;
 
-    if(type_send == -1)
+    if(type_send == -1 || string_send == NULL)
     {
         // «È¤áºÝ¶Ç¤F¦øªA¾¹¬Ý¤£À´ªº°T®§
         type_send = MTCR_SERVER_CANNOT_UNDERSTAND;
         string_send = string_unknown;
+
+        cout << "Client " << client_id << " sent an unknown socket." << endl;
     }
 
     // ¶Ç°e°T®§

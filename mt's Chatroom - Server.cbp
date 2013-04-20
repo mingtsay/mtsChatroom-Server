@@ -25,6 +25,7 @@
 			<Add option="-fexceptions" />
 		</Compiler>
 		<Unit filename="main.cpp" />
+		<Unit filename="main.hpp" />
 		<Unit filename="mtcr_sck.cpp">
 			<Option compilerVar="CC" />
 		</Unit>

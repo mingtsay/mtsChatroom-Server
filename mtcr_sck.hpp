@@ -3,7 +3,7 @@
 
 #include <winsock2.h>
 #define MTCR_PROTOCOL_VERSION 0x01
-#define MTCR_MAX_SOCKET_LENGTH 65545
+#define MTCR_MAX_SOCKET_LENGTH 4095
 
 #define MTCR_SERVER_VERSION                 0x00
 #define MTCR_SERVER_JOIN_SUCCESSED          0x10

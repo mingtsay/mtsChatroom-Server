@@ -9,8 +9,6 @@
 #include <winsock2.h>
 #include "mtcr_sck.hpp"
 
-#define new_char(x) (char*)malloc((x)*sizeof(char))
-
 #define MAX_CONNECTION 255
 
 #define HANDLER_CLOSED    0
@@ -121,6 +119,7 @@ private:
             {
                 closesocket(socket_handler[i].the_socket); // 關閉連線
                 socket_handler[i].state = HANDLER_CLOSED;
+                cout << "Client " << i << " closed." << endl;
             }
         }
     }
@@ -195,7 +194,7 @@ public:
         }
 
         // 初始化接收資料用變數
-        tmp = new_char(MTCR_MAX_SOCKET_LENGTH + 1);
+        tmp = new char(MTCR_MAX_SOCKET_LENGTH + 1);
 
         // 有新連線時的事件
         event_connected = custom_event_connected;
