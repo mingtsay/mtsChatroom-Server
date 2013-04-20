@@ -1,516 +1,401 @@
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <iostream>
-#include <conio.h>
-#include <winsock2.h>
-#include "mtcr_sck.hpp"
+#include "main.hpp"
 
-#define MAX_CONNECTION 255
+#define CLIENT_STATE_CLOSED    0
+#define CLIENT_STATE_CONNECTED 1
+#define CLIENT_STATE_JOINED    2
+#define CLIENT_STATE_PASSWORD  3
 
-#define HANDLER_CLOSED    0
-#define HANDLER_CONNECTED 1
-#define HANDLER_JOINED    2
-#define HANDLER_PASSWORD  3
-#define HANDLER_EOF       4
-
-using namespace std;
-
-WSADATA wDta;
-WORD sckVersion;
-int sckHandlerInUse[MAX_CONNECTION], sizeNew;
-SOCKET sckListener, sckHandler[MAX_CONNECTION], sckNew;
-sockaddr_in sckInfo, sckNewInfo;
-u_long sckMode;
-int keyStatus;
-char lstNickname[MAX_CONNECTION][256];
-
-const char *verServer = "1.0.0.0";
-const char *verClient = "1.0.0.0";
-const char *pwreqNick = "mt";
-const char *password = "lili40229";
-
-char *ipToString(u_long sckIP)
+struct ClientData
 {
-    char *strIP = (char *)malloc(16 * sizeof(char));
-    u_long tmpIP = sckIP;
-    int a, b, c, d;
+    char nickname[256];
+    char *ip;
+    int state;
+};
 
-    a = tmpIP & 0xFF;
+int key_status;
+struct ClientData client_data[MAX_CONNECTION];
+ChatroomSocket *my_socket;
+const char *server_version = "1.0.0.0";
+const char *client_version = "1.0.0.0";
+const char *super_nickname = "mt";
+const char *super_password = "lili40229";
 
-    tmpIP >>= 8;
-    b = tmpIP & 0xFF;
-
-    tmpIP >>= 8;
-    c = tmpIP & 0xFF;
-
-    tmpIP >>= 8;
-    d = tmpIP & 0xFF;
-
-    sprintf(strIP, "%d.%d.%d.%d", a, b, c, d);
-    return strIP;
-}
-
-int loadConfig(int);
-int initSocket(int);
-void cleanupSocket();
-
-void handleNewConnections();
-void handleDataArrivals();
-void handleSocketCleanup();
-int handleKeyboardEvents();
+int load_config(int);
+void connected_event(int);
+void data_arrival_event(int, const char *);
+int keyboard_event();
 
 int main()
 {
-    int listenPort = 83;
-    int isRunning = 1;
+    int i, listen_port = 83, is_running = 1;
 
     cout << "mt's Chatroom - Server" << endl;
     cout << "Copyright (c) 2010-2013 Ming Tsay. All rights reserved." << endl << endl;
-    cout << "Keyboard events: q = quit the program." << endl << endl;
-    keyStatus = 0; // for easter egg
+    cout << "Keyboard events: Q = quit the program." << endl << endl;
+    key_status = 0; // for easter egg
 
     cout << "Loading configure file..." << endl;
-    listenPort = loadConfig(listenPort);
+    listen_port = load_config(listen_port); // 載入設定檔
 
-    if(initSocket(listenPort) != 0)
+    my_socket = new ChatroomSocket(listen_port, &connected_event, &data_arrival_event);
+
+    if(my_socket->get_last_error() != WINSOCK_LASTERR_NONE) // 發生錯誤
     {
-        cout << "Error while initializing socket, maybe port " << listenPort << " is in use!" << endl;
+        cout << "Error while initializing socket, perhaps the port " << listen_port << " is in use!" << endl;
         cout << "Server stopping..." << endl;
         return 0;
     }
 
-    cout << "Server listen on port " << listenPort << "." << endl;
+    cout << "Server listened on port " << listen_port << "." << endl;
 
-    while(isRunning)
+    for(i = 0; i < MAX_CONNECTION; ++i) // 初始化客戶端資料
     {
-        handleNewConnections();
-        handleDataArrivals();
-        handleSocketCleanup();
-        isRunning = handleKeyboardEvents();
+        client_data[i].state = CLIENT_STATE_CLOSED;
     }
 
+    while(is_running) // 無限迴圈直到鍵盤事件
+    {
+        my_socket->do_events();
+        is_running = keyboard_event();
+    }
+
+    cout << "You pressed 'Q' for quit the program." << endl;
     cout << "Server is stopping..." << endl;
 
-    cleanupSocket();
+    delete my_socket;
 
     return 0;
 }
 
-int loadConfig(int defaultPort)
+int load_config(int default_port)
 {
-    FILE *fileConfig = fopen("mtcrd.conf", "r");
-    if(fileConfig)
+    int config_port = default_port;
+    FILE *file_config = fopen("mtcrd.conf", "r");
+    if(file_config) // 檔案存在
     {
-        if(!feof(fileConfig)) fscanf(fileConfig, "%d", &defaultPort);
+        if(!feof(file_config)) fscanf(file_config, "%d", &config_port); // 讀取檔案
+        fclose(file_config);
     }
-    else
+    else // 檔案不存在
     {
-        FILE *fileConfig = fopen("mtcrd.conf", "w");
-        if(fileConfig)
+        file_config = fopen("mtcrd.conf", "w"); // 建立檔案
+        if(file_config)
         {
-            fprintf(fileConfig, "%d", defaultPort);
+            fprintf(file_config, "%d", config_port); // 寫入檔案
         }
+        fclose(file_config);
     }
 
-    return defaultPort;
+    if(config_port > 65535 || config_port < 1) // 檢查 port 可用性
+        return default_port;
+
+    return config_port;
 }
 
-int initSocket(int p)
-{
-    int numError, i;
-    sckVersion = MAKEWORD(2, 2);
-
-    for(i = 0; i < MAX_CONNECTION; ++i) sckHandlerInUse[i] = HANDLER_CLOSED;
-
-    numError = WSAStartup(sckVersion, &wDta);
-    if(numError != 0) return -1;
-
-    sckListener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if(sckListener == INVALID_SOCKET)
-    {
-        WSACleanup();
-        return -1;
-    }
-
-    sckInfo.sin_family = AF_INET;
-    sckInfo.sin_addr.s_addr = INADDR_ANY;
-    sckInfo.sin_port = htons(p);
-
-    if(bind(sckListener, (SOCKADDR *)(&sckInfo), sizeof(sckInfo)) == SOCKET_ERROR)
-    {
-        WSACleanup();
-        return -1;
-    }
-
-    listen(sckListener, 1);
-
-    sckMode = 1; // Enable non-blocking mode.
-    ioctlsocket(sckListener, FIONBIO, &sckMode);
-
-    return 0;
-}
-
-void cleanupSocket()
-{
-    closesocket(sckListener);
-    WSACleanup();
-}
-
-int getFreeHandler()
+int nickname_exists(const char *string_nickname) // 檢查暱稱是否存在
 {
     int i;
 
     for(i = 0; i < MAX_CONNECTION; ++i)
     {
-        if(sckHandlerInUse[i] == HANDLER_CLOSED)
+        if(client_data[i].state == CLIENT_STATE_JOINED)
         {
-            sckHandlerInUse[i] = HANDLER_CONNECTED;
-            return i;
+            if(strcmp(client_data[i].nickname, string_nickname) == 0) return 1; // 找到相同的
         }
     }
-
-    return -1;
+    return 0; // 找不到
 }
 
-void freeHandler(int i)
+void connected_event(int client_id) // 客戶端連上了
 {
-    if(i >= 0 && i < MAX_CONNECTION) sckHandlerInUse[i] = HANDLER_CLOSED;
+    client_data[client_id].state = CLIENT_STATE_CONNECTED;
+    client_data[client_id].ip = my_socket->get_handler_ip(client_id);
 }
 
-/** handling functions **/
-
-void handleNewConnections()
+void data_arrival_event(int client_id, const char *string_data) // 客戶端傳資料過來了
 {
-    int handlerID;
-    char *clientIP;
+    int i, j;
+    int type, type_send = -1;
+    int client_length, server_length, nickname_length, password_length;
+    int color_id, to_id, message_length, count_online, online_length;
+    char *data, *string_send, *string_nickname, *string_password, *string_message;
+    char *string_empty = new char(1); string_empty[0] = '\0';
+    char string_unknown[] = "Sorry but I could not understand what you want to do.";
 
-    sizeNew = sizeof(sockaddr_in);
-    sckNew = accept(sckListener, (sockaddr *)&sckNewInfo, &sizeNew);
-
-    if(sckNew != INVALID_SOCKET)
+    if(parse_MTCR_socket(string_data, &type, &data)) // 分析資料
     {
-        // A client connected.
-
-        handlerID = getFreeHandler();
-        if(handlerID == -1)
+        switch(type)
         {
-            cout << "No free handler for new connections! Maximum: " << MAX_CONNECTION << endl;
-            return;
-        }
+        case MTCR_CLIENT_GET_VERSION: // 取得版本
+            client_length = strlen(client_version);
+            server_length = strlen(server_version);
 
-        sckHandler[handlerID] = sckNew;
+            string_send = new char(client_length + server_length + 3);
 
-        clientIP = ipToString(sckNewInfo.sin_addr.s_addr);
-        cout << "A connection was accepted and assigned ID " << handlerID << ". IP: " << clientIP << endl;
-    }
-}
+            string_send[0] = client_length;
+            string_send[client_length + 1] = server_length;
 
-int isNicknameExists(const char *strNickname)
-{
-    int i;
+            memcpy(string_send + 1, client_version, client_length);
+            memcpy(string_send + client_length + 2, server_version, server_length);
 
-    for(i = 0; i < MAX_CONNECTION; ++i)
-    {
-        if(sckHandlerInUse[i] == HANDLER_JOINED)
-        {
-            if(strcmp(strNickname, lstNickname[i]) == 0) return 1;
-        }
-    }
-    return 0;
-}
+            string_send[client_length + server_length + 2] = '\0';
 
-void sendSocket(byte sckType, const char *sckData, SOCKET sckClient)
-{
-    byte *sckSend = createMTCRSocket(sckType, sckData);
-    printf("Send socket type %02X.\n", sckType);
-    send(sckClient, (char *)sckSend, strlen((char *)sckSend), 0);
-}
-
-void handleDataArrivals()
-{
-    int i, j, k;
-    int lenReceived, onlineCount, intColorID, intToID;
-    byte strReceived[MTCR_MAX_SOCKET_LENGTH];
-    int lenClient, lenServer, lenNickname, lenPassword, lenMessage, lenOnlineList;
-    char *strSend, *strNickname, *strPassword, *strMessage, *strOnlineList;
-
-    for(i = 0; i < MAX_CONNECTION; ++i)
-    {
-        if(sckHandlerInUse[i] != HANDLER_CLOSED)
-        {
-            lenReceived = recv(sckHandler[i], (char *)(&strReceived), MTCR_MAX_SOCKET_LENGTH, 0);
-            if(lenReceived > 0)
+            type_send = MTCR_SERVER_VERSION;
+            break;
+        case MTCR_CLIENT_JOIN: // 加入聊天室
+            if(client_data[client_id].state == CLIENT_STATE_CONNECTED)
             {
-                cout << "Client sent " << lenReceived << " bytes to server." << endl;
-                if(
-                   strReceived[0] == 'M' &&
-                   strReceived[1] == 'T' &&
-                   strReceived[2] == 'C' &&
-                   strReceived[3] == 'R' &&
-                   strReceived[4] == MTCR_PROTOCOL_VERSION
-                   )
+                nickname_length = data[0];
+
+                string_nickname = new char(nickname_length + 1);
+                memcpy(string_nickname, data + 1, nickname_length);
+                string_nickname[nickname_length] = '\0';
+
+                if(nickname_exists(string_nickname)) // 檢查暱稱存在
                 {
-                    cout << "Client sent a MTCR socket." << endl;
-                    switch(strReceived[5])
+                    type_send = MTCR_SERVER_JOIN_FAILED;
+                    string_send = string_empty;
+
+                    client_data[client_id].state = CLIENT_STATE_CONNECTED;
+                }
+                else if(strcmp(super_nickname, string_nickname) == 0) // 要密碼的暱稱
+                {
+                    type_send = MTCR_SERVER_PASSWORD_REQUIRED;
+                    string_send = string_empty;
+
+                    strcpy(client_data[client_id].nickname, string_nickname);
+                    client_data[client_id].state = CLIENT_STATE_PASSWORD;
+                }
+                else // 可使用的暱稱
+                {
+                    strcpy(client_data[client_id].nickname, string_nickname);
+                    client_data[client_id].state = CLIENT_STATE_JOINED;
+
+                    string_send = new char(nickname_length + 3);
+                    string_send[0] = client_id;
+                    string_send[1] = nickname_length;
+                    memcpy(string_send + 2, string_nickname, nickname_length);
+                    string_send[nickname_length + 2] = '\0';
+
+                    for(i = 0; i < MAX_CONNECTION; ++i) // 告訴所有人有新使用者加入
                     {
-                    case MTCR_CLIENT_GET_VERSION:
-                        cout << "Client send: Get Version" << endl;
-
-                        lenClient = strlen(verClient);
-                        lenServer = strlen(verServer);
-                        strSend = (char *)malloc((lenClient + lenServer + 5) * sizeof(char));
-
-                        strSend[0] = lenClient & 0xFF;
-                        strSend[lenClient + 1] = lenServer & 0xFF;
-
-                        memcpy(strSend + 1, verClient, lenClient);
-                        memcpy(strSend + 2 + lenClient, verServer, lenServer);
-                        strSend[lenClient + lenServer + 2] = '\0';
-
-                        sendSocket(MTCR_SERVER_VERSION, strSend, sckHandler[i]);
-                        continue;
-                    case MTCR_CLIENT_JOIN:
-                        cout << "Client send: Join" << endl;
-                        if(sckHandlerInUse[i] == HANDLER_CONNECTED)
+                        if(client_data[client_id].state == CLIENT_STATE_JOINED)
                         {
-                            lenNickname = (int)strReceived[6];
-                            strNickname = (char *)malloc((lenNickname + 1) * sizeof(char));
-                            memcpy(strNickname, strReceived + 7, lenNickname);
-                            strNickname[lenNickname] = '\0';
-
-                            if(isNicknameExists(strNickname))
-                            {
-                                sendSocket(MTCR_SERVER_JOIN_FAILED, "", sckHandler[i]);
-                            }
-                            else if(strcmp(strNickname, pwreqNick) == 0)
-                            {
-                                sendSocket(MTCR_SERVER_PASSWORD_REQUIRED, "", sckHandler[i]);
-                            }
-                            else
-                            {
-                                sckHandlerInUse[i] = HANDLER_JOINED;
-                                strcpy(lstNickname[i], strNickname);
-                                sendSocket(MTCR_SERVER_JOIN_SUCCESSED, "", sckHandler[i]);
-                            }
-
-                            continue;
+                            my_socket->send_data(i, create_MTCR_socket(MTCR_SERVER_USER_JOINED, string_send));
                         }
-                        break;
-                    case MTCR_CLIENT_PASSWORD:
-                        cout << "Client send: Password" << endl;
-                        if(sckHandlerInUse[i] == HANDLER_PASSWORD)
+                    }
+
+                    delete [] string_send;
+
+                    type_send = MTCR_SERVER_JOIN_SUCCESSED;
+                    string_send = string_empty;
+                }
+
+                delete [] string_nickname;
+            }
+            break;
+        case MTCR_CLIENT_PASSWORD: // 登入密碼
+            if(client_data[client_id].state == CLIENT_STATE_PASSWORD)
+            {
+                password_length = data[0];
+
+                string_password = new char(password_length + 1);
+                memcpy(string_password, data + 1, password_length);
+                string_password[password_length] = '\0';
+
+                if(strcmp(super_password, string_password) == 0)
+                {
+                    type_send = MTCR_SERVER_JOIN_SUCCESSED;
+                    string_send = string_empty;
+
+                    client_data[client_id].state = CLIENT_STATE_JOINED;
+                }
+                else
+                {
+                    type_send = MTCR_SERVER_PASSWORD_INCORRECT;
+                    string_send = string_empty;
+                }
+
+                delete [] string_password;
+            }
+            break;
+        case MTCR_CLIENT_CHANGE_NICKNAME: // 改暱稱
+            if(client_data[client_id].state == CLIENT_STATE_JOINED)
+            {
+                nickname_length = data[0];
+
+                string_nickname = new char(nickname_length + 1);
+                memcpy(string_nickname, data + 1, nickname_length);
+                string_nickname[nickname_length] = '\0';
+
+                if(nickname_exists(string_nickname) || strcmp(super_nickname, string_nickname) == 0) // 暱稱不可用
+                {
+                    type_send = MTCR_SERVER_CHANGE_NICKNAME_FAIL;
+                    string_send = string_empty;
+                }
+                else // 暱稱可使用
+                {
+                    strcpy(client_data[client_id].nickname, string_nickname);
+
+                    string_send = new char(nickname_length + 3);
+                    string_send[0] = client_id;
+                    string_send[1] = nickname_length;
+                    memcpy(string_send + 2, string_nickname, nickname_length);
+                    string_send[nickname_length + 2] = '\0';
+
+                    for(i = 0; i < MAX_CONNECTION; ++i) // 告訴所有人他改新暱稱
+                    {
+                        if(client_data[client_id].state == CLIENT_STATE_JOINED)
                         {
-                            lenPassword = (int)strReceived[6];
-                            strPassword = (char *)malloc((lenPassword + 1) * sizeof(char));
-                            memcpy(strPassword, strReceived + 7, lenPassword);
-                            strPassword[lenPassword] = '\0';
-
-                            if(strcmp(strPassword, password) == 0)
-                            {
-                                sckHandlerInUse[i] = HANDLER_JOINED;
-                                strcpy(lstNickname[i], pwreqNick);
-                                sendSocket(MTCR_SERVER_JOIN_SUCCESSED, "", sckHandler[i]);
-                            }
-                            else
-                            {
-                                sendSocket(MTCR_SERVER_PASSWORD_INCORRECT, "", sckHandler[i]);
-                            }
-
-                            continue;
+                            my_socket->send_data(i, create_MTCR_socket(MTCR_SERVER_USER_CHANGE_NICKNAME, string_send));
                         }
-                        break;
-                    case MTCR_CLIENT_CHANGE_NICKNAME:
-                        cout << "Client send: Change Nickname" << endl;
-                        if(sckHandlerInUse[i] == HANDLER_JOINED)
-                        {
-                            lenNickname = (int)strReceived[6];
-                            strNickname = (char *)malloc((lenNickname + 1) * sizeof(char));
-                            memcpy(strNickname, strReceived + 7, lenNickname);
-                            strNickname[lenNickname] = '\0';
+                    }
 
-                            if(strcmp(strNickname, pwreqNick) == 0 || isNicknameExists(strNickname))
-                            {
-                                sendSocket(MTCR_SERVER_CHANGE_NICKNAME_FAIL, "", sckHandler[i]);
-                            }
-                            else
-                            {
-                                sckHandlerInUse[i] = HANDLER_JOINED;
-                                strcpy(lstNickname[i], strNickname);
-                                sendSocket(MTCR_SERVER_JOIN_SUCCESSED, "", sckHandler[i]);
-                            }
+                    delete [] string_send;
 
-                            continue;
-                        }
-                        break;
-                    case MTCR_CLIENT_SEND_MESSAGE:
-                        cout << "Client send: Send Message" << endl;
-                        if(sckHandlerInUse[i] == HANDLER_JOINED)
-                        {
-                            intColorID = strReceived[6];
+                    type_send = MTCR_SERVER_CHANGE_NICKNAME_OKAY;
+                    string_send = string_empty;
+                }
 
-                            lenMessage = (strReceived[7] << 8) + strReceived[8];
-                            strMessage = (char *)malloc((lenMessage + 1) * sizeof(char));
-                            memcpy(strMessage, strReceived + 9, lenMessage);
-                            strMessage[lenMessage] = '\0';
+                delete [] string_nickname;
+            }
+            break;
+        case MTCR_CLIENT_SEND_MESSAGE: // 送訊息
+            if(client_data[client_id].state == CLIENT_STATE_JOINED)
+            {
+                color_id = data[0];
+                message_length = (data[1] << 8) + data[2];
 
-                            if(intColorID > 6 || intColorID < 3) intColorID = 4;
-                            if(strcmp(lstNickname[i], pwreqNick) == 0) intColorID = 2;
+                string_message = new char(message_length + 1);
+                memcpy(string_message, data + 3, message_length);
+                string_message[message_length] = '\0';
 
-                            strSend = (char *)malloc((5 + lenMessage + 1) * sizeof(char));
+                string_send = new char(message_length + 5);
+                string_send[0] = client_id;
+                string_send[1] = color_id;
+                string_send[2] = (message_length >> 8) & 0xFF;
+                string_send[3] = message_length & 0xFF;
+                memcpy(string_send + 4, string_message, message_length);
+                string_send[message_length + 4] = '\0';
 
-                            strSend[0] = i & 0xFF;
-                            strSend[1] = intColorID & 0xFF;
-                            strSend[2] = (lenMessage >> 8) & 0xFF;
-                            strSend[3] = lenMessage & 0xFF;
-                            memcpy(strSend + 4, strMessage, lenMessage);
-                            strSend[5 + lenMessage] = '\0';
-
-                            for(j = 0; j < MAX_CONNECTION; ++j)
-                            {
-                                if(sckHandlerInUse[j] == HANDLER_JOINED)
-                                {
-                                    sendSocket(MTCR_SERVER_MSG_SEND, strSend, sckHandler[j]);
-                                }
-                            }
-
-                            continue;
-                        }
-                        break;
-                    case MTCR_CLIENT_SEND_PRIVATE:
-                        cout << "Client send: Send Private Message" << endl;
-                        if(sckHandlerInUse[i] == HANDLER_JOINED)
-                        {
-                            intToID = strReceived[6];
-
-                            if(sckHandlerInUse[intToID] != HANDLER_JOINED)
-                            {
-                                sendSocket(MTCR_SERVER_MSG_SEND_PRIVATE_FAILED, "", sckHandler[i]);
-                                continue;
-                            }
-
-                            intColorID = strReceived[7];
-
-                            lenMessage = (strReceived[8] << 8) + strReceived[9];
-                            strMessage = (char *)malloc((lenMessage + 1) * sizeof(char));
-                            memcpy(strMessage, strReceived + 10, lenMessage);
-                            strMessage[lenMessage] = '\0';
-
-                            if(intColorID > 6 || intColorID < 3) intColorID = 4;
-                            if(strcmp(lstNickname[i], pwreqNick) == 0) intColorID = 2;
-
-                            strSend = (char *)malloc((5 + lenMessage + 1) * sizeof(char));
-
-                            strSend[0] = i & 0xFF;
-                            strSend[1] = intToID & 0xFF;
-                            strSend[2] = intColorID & 0xFF;
-                            strSend[3] = (lenMessage >> 8) & 0xFF;
-                            strSend[4] = lenMessage & 0xFF;
-                            memcpy(strSend + 5, strMessage, lenMessage);
-                            strSend[5 + lenMessage] = '\0';
-
-                            sendSocket(MTCR_SERVER_MSG_SEND, strSend, sckHandler[intToID]);
-
-                            continue;
-                        }
-                        break;
-                    case MTCR_CLIENT_GET_ONLINE_LIST:
-                        cout << "Client send: Get Online List" << endl;
-                        if(sckHandlerInUse[i] == HANDLER_JOINED)
-                        {
-                            onlineCount = 0;
-                            lenOnlineList = 1;
-
-                            for(j = 0; j < MAX_CONNECTION; ++j)
-                            {
-                                if(sckHandlerInUse[j] == HANDLER_JOINED)
-                                {
-                                    ++onlineCount;
-                                    lenOnlineList += 2 + strlen(lstNickname[j]);
-                                }
-                            }
-
-                            strOnlineList = (char *)malloc((lenOnlineList + 1) * sizeof(char));
-
-                            strOnlineList[0] = onlineCount & 0xFF;
-
-                            for(j = 0, k = 1; j < MAX_CONNECTION; ++j)
-                            {
-                                if(sckHandlerInUse[j] == HANDLER_JOINED)
-                                {
-                                    strOnlineList[k++] = j & 0xFF;
-                                    strOnlineList[k++] = strlen(lstNickname[j]) & 0xFF;
-                                    memcpy(strOnlineList + k, lstNickname[j], strlen(lstNickname[j]));
-                                    k += strlen(lstNickname[j]);
-                                }
-                            }
-
-                            strOnlineList[k] = '\0';
-
-                            sendSocket(MTCR_SERVER_ONLINE_LIST, strOnlineList, sckHandler[i]);
-
-                            continue;
-                        }
-                        break;
+                for(i = 0; i < MAX_CONNECTION; ++i) // 傳訊息給每個人
+                {
+                    if(client_data[i].state == CLIENT_STATE_JOINED)
+                    {
+                        my_socket->send_data(i, create_MTCR_socket(MTCR_SERVER_MSG_SEND, string_send));
                     }
                 }
-                else cout << "Client sent an non-MTCR socket!" << endl;
 
-                sendSocket(MTCR_SERVER_CANNOT_UNDERSTAND, "Sorry but I could not understand what you want to do.", sckHandler[i]);
+                delete [] string_send;
             }
-            else if(lenReceived == 0)
+            break;
+        case MTCR_CLIENT_SEND_PRIVATE: // 傳私人訊息
+            if(client_data[client_id].state == CLIENT_STATE_JOINED)
             {
-                sckHandlerInUse[i] = HANDLER_EOF;
+                color_id = data[0];
+                to_id = data[1];
+                message_length = (data[2] << 8) + data[3];
+
+                if(client_data[to_id].state == CLIENT_STATE_JOINED) // 可以傳
+                {
+                    string_message = new char(message_length + 1);
+                    memcpy(string_message, data + 4, message_length);
+                    string_message[message_length] = '\0';
+
+                    string_send = new char();
+                    my_socket->send_data(to_id, create_MTCR_socket(MTCR_SERVER_MSG_SEND_PRIVATE, string_send));
+                    delete [] string_send;
+
+                    type_send = MTCR_SERVER_MSG_SEND_PRIVATE_OKAY;
+                    string_send = string_empty;
+                }
+                else // 不能傳
+                {
+                    type_send = MTCR_SERVER_MSG_SEND_PRIVATE_FAILED;
+                    string_send = string_empty;
+                }
             }
+            break;
+        case MTCR_CLIENT_GET_ONLINE_LIST: // 取得線上使用者清單
+            if(client_data[client_id].state == CLIENT_STATE_JOINED)
+            {
+                // 計算人數還有暱稱長度
+                count_online = 0;
+                online_length = 1;
+                for(i = 0; i < MAX_CONNECTION; ++i)
+                {
+                    if(client_data[i].state == CLIENT_STATE_JOINED)
+                    {
+                        ++count_online;
+                        online_length += 2 + strlen(client_data[i].nickname);
+                    }
+                }
+
+                // 準備字串
+                string_send = new char(online_length + 1);
+                string_send[0] = count_online;
+
+                // 準備清單
+                for(i = 0, j = 1; i < MAX_CONNECTION; ++i)
+                {
+                    if(client_data[i].state == CLIENT_STATE_JOINED)
+                    {
+                        string_send[j++] = i;
+                        string_send[j++] = strlen(client_data[i].nickname);
+                        memcpy(string_send + j, client_data[i].nickname, strlen(client_data[i].nickname));
+                        j += strlen(client_data[i].nickname);
+                    }
+                }
+
+                type_send = MTCR_SERVER_ONLINE_LIST;
+            }
+            break;
         }
     }
-}
 
-void handleSocketCleanup()
-{
-    int i;
+    delete [] data;
 
-    for(i = 0; i < MAX_CONNECTION; ++i)
+    if(type_send == -1)
     {
-        if(sckHandlerInUse[i] == HANDLER_EOF)
-        {
-            cout << "Connection of " << i << " is closed." << endl;
-            closesocket(sckHandler[i]);
-            sckHandlerInUse[i] = HANDLER_CLOSED;
-        }
+        // 客戶端傳了伺服器看不懂的訊息
+        type_send = MTCR_SERVER_CANNOT_UNDERSTAND;
+        string_send = string_unknown;
     }
+
+    // 傳送訊息
+    my_socket->send_data(client_id, create_MTCR_socket(type_send, string_send));
+    delete [] string_send;
 }
 
-int handleKeyboardEvents()
+int keyboard_event()
 {
-    char chKey;
-    if(kbhit())
+    char keypress;
+
+    if(kbhit()) // 鍵盤被按下了
     {
-        chKey = getch();
-        if(chKey >= 'A' && chKey <= 'Z') chKey += 'a' - 'A';
+        keypress = getch();
+        if(keypress >= 'a' && keypress <= 'z') keypress -= 'a' - 'A'; // 轉大寫
 
-        if(chKey == 'q') return 0; // Quit the program.
+        if(keypress == 'Q') return 0; // 結束程式
 
-        switch(keyStatus)
+        switch(key_status) // for easter egg
         {
         case 0:
-            if(chKey == 'i') keyStatus++; else keyStatus = 0; break;
+            if(keypress == 'I') key_status++; else key_status = 0; break;
         case 1:
-            if(chKey == 'l') keyStatus++; else keyStatus = 0; break;
+            if(keypress == 'L') key_status++; else key_status = 0; break;
         case 2:
-            if(chKey == 'o') keyStatus++; else keyStatus = 0; break;
+            if(keypress == 'O') key_status++; else key_status = 0; break;
         case 3:
-            if(chKey == 'v') keyStatus++; else keyStatus = 0; break;
+            if(keypress == 'V') key_status++; else key_status = 0; break;
         case 4:
-            if(chKey == 'e') keyStatus++; else keyStatus = 0; break;
+            if(keypress == 'E') key_status++; else key_status = 0; break;
         case 5:
-            if(chKey == 'm') keyStatus++; else keyStatus = 0; break;
+            if(keypress == 'M') key_status++; else key_status = 0; break;
         case 6:
-            if(chKey == 't') cout << "I love you, too! <3" << endl;
-            keyStatus = 0;
-            break;
+            if(keypress == 'T') cout << "I love you, too! <3" << endl;
         default:
-            keyStatus = 0;
+            key_status = 0;
         }
     }
     return 1;

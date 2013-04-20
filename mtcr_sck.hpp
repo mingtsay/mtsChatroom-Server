@@ -3,7 +3,7 @@
 
 #include <winsock2.h>
 #define MTCR_PROTOCOL_VERSION 0x01
-#define MTCR_MAX_SOCKET_LENGTH 270
+#define MTCR_MAX_SOCKET_LENGTH 65545
 
 #define MTCR_SERVER_VERSION                 0x00
 #define MTCR_SERVER_JOIN_SUCCESSED          0x10
@@ -32,9 +32,7 @@
 #define MTCR_CLIENT_SEND_PRIVATE    0x51
 #define MTCR_CLIENT_GET_ONLINE_LIST 0x60
 
-
-typedef struct MTCR_SOCKET sckMTCR;
-
-byte *createMTCRSocket(byte, const char *);
+char *create_MTCR_socket(int, const char *);
+int parse_MTCR_socket(const char *, int *, char **);
 
 #endif

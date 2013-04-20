@@ -2,27 +2,50 @@
 #include <cstring>
 #include "mtcr_sck.hpp"
 
-byte *createMTCRSocket(byte sckType, const char *sckData)
+char *create_MTCR_socket(int socket_type, const char *socket_data)
 {
-    byte *newMTCRSocket;
-    int sckLength;
+    char *new_MTCR_socket;
+    int socket_length;
 
-    sckLength = 6 + strlen(sckData);
+    socket_length = 6 + strlen(socket_data);
 
-    newMTCRSocket = (byte *)malloc((sckLength + 1) * sizeof(byte));
+    new_MTCR_socket = (char *)malloc((socket_length + 1) * sizeof(byte));
 
-    newMTCRSocket[0] = 'M';
-    newMTCRSocket[1] = 'T';
-    newMTCRSocket[2] = 'C';
-    newMTCRSocket[3] = 'R';
+    new_MTCR_socket[0] = 'M';
+    new_MTCR_socket[1] = 'T';
+    new_MTCR_socket[2] = 'C';
+    new_MTCR_socket[3] = 'R';
 
-    newMTCRSocket[4] = MTCR_PROTOCOL_VERSION;
+    new_MTCR_socket[4] = MTCR_PROTOCOL_VERSION;
 
-    newMTCRSocket[5] = sckType;
+    new_MTCR_socket[5] = socket_type;
 
-    memcpy(newMTCRSocket + 6, sckData, strlen(sckData));
+    memcpy(new_MTCR_socket + 6, socket_data, strlen(socket_data));
 
-    newMTCRSocket[sckLength] = '\0';
+    new_MTCR_socket[socket_length] = '\0';
 
-    return newMTCRSocket;
+    return new_MTCR_socket;
+}
+
+int parse_MTCR_socket(const char *socket_data, int *type, char **data)
+{
+    int data_length = strlen(socket_data) - 6;
+
+    *data = (char *)malloc((data_length + 1) * sizeof(char));
+
+    if(
+       socket_data[0] == 'M' &&
+       socket_data[1] == 'T' &&
+       socket_data[2] == 'C' &&
+       socket_data[3] == 'R' &&
+       socket_data[4] == MTCR_PROTOCOL_VERSION
+       )
+    {
+        *type = socket_data[5];
+        memcpy(*data, socket_data + 6, data_length);
+        (*data)[data_length] = '\0';
+
+        return 1;
+    }
+    return 0;
 }
