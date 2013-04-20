@@ -1,0 +1,18 @@
+# depslib dependency file v1.0
+1366431638 source:c:\users\ming\documents\cproj\mt's chatroom - server\main.cpp
+	<cstdio>
+	<cstdlib>
+	<cstring>
+	<iostream>
+	<conio.h>
+	<winsock2.h>
+	"mtcr_sck.hpp"
+
+1366430808 source:c:\users\ming\documents\cproj\mt's chatroom - server\mtcr_sck.cpp
+	<cstdlib>
+	<cstring>
+	"mtcr_sck.hpp"
+
+1366430366 c:\users\ming\documents\cproj\mt's chatroom - server\mtcr_sck.hpp
+	<winsock2.h>
+
